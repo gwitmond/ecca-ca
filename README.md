@@ -17,6 +17,8 @@ You can find example websites at:
   <a href="https://dating.wtmnd.nl:10443/">The worlds most secure dating site</a> 
 and <a href="https://www.ecca.wtmnd.nl/">The Favorite Number Site</a>.
 
+For more information, please see <a href="https://witmond.nl/eccentric-authentication/introduction.html">Eccentric Authentication</a>
+
 Guido.
 
 <!-- Piwik Image Tracker -->
