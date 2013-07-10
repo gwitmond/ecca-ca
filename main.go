@@ -12,21 +12,17 @@ import (
 	"fmt"
 	"errors"
 	"net/http"
-	//"crypto/x509"
 	"crypto/x509/pkix"
 	"crypto/rsa"
 	"crypto/rand"
 	"math/big"
-	//"crypto/tls"
 	"encoding/pem"
 	"io/ioutil"
 	"os"
 	"time"
-	"github.com/gwenn/gosqlite"
 	"strconv"
 	"flag"
 	"strings"
-	"regexp"
 )
 
 // The things to set before running.
@@ -63,9 +59,6 @@ func main() {
 	http.HandleFunc("/get-certificate", getCertificate)
 	http.Handle("/static/", http.FileServer(http.Dir(".")))
 
-	// initdb if necessary
-	initdb()
-
 	// Set  the server certificate to encrypt the connection with TLS
 	ssl_certificate := *configDir + "/" + *hostname + ".cert.pem"
 	ssl_cert_key   := *configDir + "/" + *hostname + ".key.pem"
@@ -76,12 +69,6 @@ func main() {
 	check(server6.ListenAndServeTLS(ssl_certificate, ssl_cert_key))
 }
 
-// match  just plain <cn> no @ allowed.
-//var cnRE = regexp.MustCompile(`^([^@]+)(@@([a-zA-Z0-9._]+))?$`)
-//var cnRE = regexp.MustCompile(`^([^@]*)$`)
-//	match := cnRE.FindStringSubmatch(cnvalue)
-//	fmt.Printf("match is %#v\n", match)
-	//username := match[1]
 
 func registerPubkey(w http.ResponseWriter, req *http.Request) {
 	cn  := req.FormValue("cn")
@@ -103,12 +90,12 @@ func registerPubkey(w http.ResponseWriter, req *http.Request) {
 	// They must alse be recognisably different for humans.  <cn> == < cn> == <cn    >
 	
 	// This will be the full identity for the user. This is what we sign.
-	cn := fmt.Sprintf("%s@@%s", cn, *namespace)
+	cn = fmt.Sprintf("%s@@%s", cn, *namespace)
 	
 	// Validate uniqueness of the CN (Important requirement for Ecca)
 	// BUG(gw): There is a slight race condition between the validation and generation ...
-	nicks := getClients(cn)
-	if len(nicks) > 0 {
+	nick := getClient(cn)
+	if nick != nil {
 		http.Error(w, fmt.Sprintf("Username: %v is already taken, please choose another.", cn), 403)
 		return
 	} 
@@ -132,7 +119,7 @@ func registerPubkey(w http.ResponseWriter, req *http.Request) {
 	// Validation succeeded, sign, store certificate in db and hand it to the requestor
 	cert , err := signCert(cn, publicKey) // sign
 	check(err)
-	writeClient(client{CN: cn, certPEM: cert}) // store
+	writeClient(Client{CN: cn, CertPEM: cert}) // store
 	
 	w.Header().Set("Content-Type", "text/plain") // return
 	w.Header().Set("Content-Length", strconv.Itoa(len(cert)))
@@ -144,13 +131,10 @@ func registerPubkey(w http.ResponseWriter, req *http.Request) {
 func signCert(cn string, publicKey interface{}) ([]byte, error) {
 	// set up client structure template
 	serial := randBigInt()
-        // keyId := randBytes(20)
-	//rand.Read(keyId)
 	template := Certificate{
                 Subject: pkix.Name{
                         CommonName: cn,
-
-                },
+		},
 		// add restrictions: CA-false, authenticate, sign, encode, decode, no server!
                 SerialNumber:   serial,
                 //SubjectKeyId:   keyId,
@@ -159,7 +143,7 @@ func signCert(cn string, publicKey interface{}) ([]byte, error) {
                 NotAfter:       time.Now().AddDate(10, 0, 0).UTC(),
 		IsCA:           false,
 		KeyUsage:       KeyUsageDigitalSignature + KeyUsageContentCommitment + KeyUsageDataEncipherment + KeyUsageKeyAgreement,
-		ExtKeyUsage:    []ExtKeyUsage{ExtKeyUsageClientAuth ExtKeyUsageEmailProtection },
+		ExtKeyUsage:    []ExtKeyUsage{ExtKeyUsageClientAuth, ExtKeyUsageEmailProtection },
         }
 
 	derBytes, err := CreateClientCertificate(rand.Reader, &template, caCert, publicKey, caKey)
@@ -179,64 +163,21 @@ func getCertificate(w http.ResponseWriter, req *http.Request) {
 	}
 	
 	// Check if nickname already exists
-	nicks := getClients(nickname)
-	switch len(nicks) {
-	case 0: http.Error(w, "nickname not found", 404)
-	case 1: w.Header().Set("Content-Type", "text/plain")
-		w.Write(nicks[0].certPEM)
-	default: log.Printf("ERROR: unexpected multiple certificates for %v. Got %#v\n", nickname, nicks)
-	 	http.Error(w, "unexpected multiple certificates for nickname", 500)
+	nick := getClient(nickname)
+	switch nick {
+	case nil: http.Error(w, "nickname not found", 404)
+	default: 
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write(nick.CertPEM)
 	}
 }
 
-//////////////////////////////////////////////////////////////////
-// Database
 
-var dbFile = "eccaCA.db"
-var db *sqlite.Conn
-
-func initdb() {
-	var err error
-	db, err = sqlite.Open(*configDir + "/" + dbFile)
-	check(err)	
-	
-	err = db.Exec("CREATE TABLE clients (cn TEXT, certPEM TEXT)")
-	// check(err) // ignore
-}
-
-type client struct {
+// Database types
+type Client struct {
 	CN      string
-	certPEM []byte
+	CertPEM []byte
 }
-
-
-func writeClient(client client) {
-	st, err := db.Prepare("INSERT INTO clients (cn, certPEM) values (?, ?)")
-	check(err)
-	defer st.Finalize()
-
-	count, err := st.Insert(client.CN, client.certPEM)
-	check(err)
-	log.Println("Inserted %d clients", count)
-}
-
-func getClients(nickname string) ([]client) {
-	query, err := db.Prepare("SELECT cn, certPEM FROM clients WHERE cn = ?")
-	check(err)
-	defer query.Finalize()
-	
-	var cl []client
-	err = query.Select(func (stmt *sqlite.Stmt) (err error) {
-		var c client
-		err = stmt.Scan(&c.CN, &c.certPEM)
-		if err != nil { return }
-		cl = append(cl, c)
-		return
-	}, nickname)
-	check(err)
-	return cl
-}
-
 
 
 //////////////////////////////////////////////////////////////////
