@@ -221,8 +221,10 @@ func mybuildExtensions(template *Certificate) (ret []pkix.Extension, err error) 
 			switch usage {
 			case ExtKeyUsageClientAuth:
 				usages[i] = oidExtKeyUsageClientAuth
+			case ExtKeyUsageEmailProtection:
+				usages[i] = oidExtKeyUsageEmailProtection
 			default:
-				panic("Not implemented")
+				panic("ecca-ca: client-cert.go: Extended key usage is not implemented")
 			}
 		}
                 ret[n].Value, err = asn1.Marshal(usages)
